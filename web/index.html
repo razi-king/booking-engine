@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booking Engine · seat map demo</title>
+<style>
+  :root {
+    --ink: #17233a; --muted: #5d6b82; --line: #d6dce6; --bg: #eef2f7; --card: #fff;
+    --free: #ffffff; --pick: #0e7c86; --held: #e3a72f; --booked: #a3adbd; --err: #b3261e;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 20px 64px; display: grid; gap: 24px; grid-template-columns: 1fr 320px; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+  h1 { grid-column: 1 / -1; margin: 0; font-size: 28px; letter-spacing: -0.01em; }
+  h1 small { display: block; font-size: 15px; font-weight: 400; color: var(--muted); margin-top: 4px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  .flights { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .flights button { border: 1px solid var(--line); background: #f7f9fc; border-radius: 10px; padding: 8px 12px; cursor: pointer; text-align: left; color: var(--ink); font: inherit; }
+  .flights button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
+  .flights b { display: block; font-size: 14px; }
+  .flights span { font-size: 12px; opacity: .8; }
+  .cabin { width: max-content; margin: 0 auto; padding: 18px 22px; border: 2px solid var(--line); border-radius: 60px 60px 18px 18px; }
+  .row { display: grid; grid-template-columns: 22px repeat(3, 30px) 26px repeat(3, 30px); gap: 6px; align-items: center; margin-bottom: 6px; }
+  .row .n { font-size: 11px; color: var(--muted); text-align: right; }
+  .head { font-size: 11px; color: var(--muted); text-align: center; }
+  .seat { width: 30px; height: 30px; border-radius: 7px 7px 4px 4px; border: 1.5px solid #9aa7bb; background: var(--free); cursor: pointer; padding: 0; font: 10px system-ui; color: transparent; }
+  .seat:hover:not(:disabled), .seat:focus-visible { color: var(--ink); outline: 2px solid var(--pick); outline-offset: 1px; }
+  .seat.business { border-color: #6c5ba7; }
+  .seat.picked { background: var(--pick); border-color: var(--pick); color: #fff; }
+  .seat.held { background: var(--held); border-color: var(--held); cursor: not-allowed; }
+  .seat.booked { background: var(--booked); border-color: var(--booked); cursor: not-allowed; }
+  .gap { margin-top: 14px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 14px; justify-content: center; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 4px; border: 1.5px solid #9aa7bb; }
+  aside h2 { font-size: 16px; margin: 0 0 12px; }
+  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+  input { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; }
+  .total { font-size: 26px; font-weight: 600; margin: 4px 0 2px; }
+  .picked-list { color: var(--muted); min-height: 22px; }
+  .btn { width: 100%; font: inherit; font-weight: 600; padding: 11px; border-radius: 10px; border: 0; background: var(--ink); color: #fff; cursor: pointer; margin-top: 10px; }
+  .btn.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .timer { font-variant-numeric: tabular-nums; font-size: 34px; font-weight: 700; color: var(--pick); }
+  .pnr { font: 700 30px ui-monospace, Menlo, monospace; letter-spacing: .12em; }
+  .msg { margin-top: 12px; font-size: 13px; color: var(--err); min-height: 18px; }
+  .mode { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+  .mode code { background: #fff; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line); }
+  @media (prefers-reduced-motion: no-preference) { .seat { transition: background .12s; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pick your seats<small>Seats are held for you while you pay. Nobody else can take them until the timer ends.</small></h1>
+  <section class="card">
+    <div class="flights" id="flights" role="group" aria-label="Flights"></div>
+    <div class="cabin" id="cabin" aria-label="Seat map"></div>
+    <div class="legend"><span><i></i>Free</span><span><i style="background:var(--pick);border-color:var(--pick)"></i>Your pick</span><span><i style="background:var(--held);border-color:var(--held)"></i>Held by someone</span><span><i style="background:var(--booked);border-color:var(--booked)"></i>Booked</span><span><i style="border-color:#6c5ba7"></i>Business</span></div>
+  </section>
+  <aside class="card" id="panel" aria-live="polite"></aside>
+  <p class="mode" id="mode"></p>
+</main>
+<script>
+// ── API access ───────────────────────────────────────────────────────────
+// The page talks to the Go API on the same site, or to ?api=<url>. If no API
+// answers (for example on GitHub Pages), it switches to DEMO MODE: a tiny copy
+// of the rules running in your browser, so the page still works.
+const params = new URLSearchParams(location.search);
+const API = (params.get('api') || '').replace(/\/$/, '');
+const user = localStorage.getItem('uid') || ('user-' + Math.random().toString(36).slice(2, 8));
+try { localStorage.setItem('uid', user); } catch {}
+let demo = false;
+
+async function call(method, path, body, key) {
+  if (demo) return mock(method, path, body);
+  const headers = { 'X-User-ID': user };
+  if (body) headers['Content-Type'] = 'application/json';
+  if (key) headers['Idempotency-Key'] = key; // same key on a retry = no double booking
+  const res = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const data = res.status === 204 ? null : await res.json();
+  if (!res.ok) throw Object.assign(new Error(data.message), { data, status: res.status });
+  return data;
+}
+
+// ── Demo mode (in-browser copy of the rules) ─────────────────────────────
+const M = { flights: [], seats: {}, holds: {}, bookings: {} };
+function mockSeed() {
+  const day = new Date(); day.setUTCHours(0, 0, 0, 0);
+  [['6E-2031','BOM','DEL',7,6,550000],['AI-865','DEL','BLR',14,9,620000],['QP-1102','BLR','GOI',21,17,380000]].forEach(([n,f,t,d,h,base], i) => {
+    const id = i + 1, dep = new Date(day.getTime() + d * 864e5 + h * 36e5);
+    M.flights.push({ id, number: n, from: f, to: t, departure: dep.toISOString(), rows: 30 });
+    M.seats[id] = [];
+    for (let r = 1; r <= 30; r++) for (const l of 'ABCDEF') {
+      let p = r <= 2 ? base * 4 : base + ('AF'.includes(l) ? 35000 : 'CD'.includes(l) ? 25000 : 0) + (r <= 5 ? 50000 : 0);
+      M.seats[id].push({ seat: r + l, row: r, letter: l, cabin: r <= 2 ? 'business' : 'economy', pricePaise: p, hold: null, until: 0, pnr: null });
+    }
+    // some seats already taken by "other people", so the map looks real
+    for (let k = 0; k < 40; k++) M.seats[id][(k * 37 + id * 11) % 180].pnr = 'OTHER';
+  });
+}
+function mock(method, path, body) {
+  const now = Date.now(), err = (status, message) => { throw Object.assign(new Error(message), { status }); };
+  const status = s => s.pnr ? 'booked' : (s.hold && s.until > now ? 'held' : 'available');
+  let m;
+  if (path === '/api/v1/flights') return { flights: M.flights };
+  if ((m = path.match(/^\/api\/v1\/flights\/(\d+)\/seats$/))) {
+    const seats = M.seats[m[1]].map(s => ({ ...s, status: status(s) })), rows = [];
+    for (let i = 0; i < 180; i += 6) rows.push(seats.slice(i, i + 6));
+    return { flight: M.flights[m[1] - 1], letters: 'ABCDEF', rows };
+  }
+  if (method === 'POST' && path === '/api/v1/holds') {
+    const seats = M.seats[body.flightId].filter(s => body.seats.includes(s.seat));
+    const taken = seats.filter(s => status(s) !== 'available').map(s => s.seat);
+    if (taken.length) err(409, 'one or more seats are not available: ' + taken.join(', '));
+    const h = { id: crypto.randomUUID(), flightId: body.flightId, seats: body.seats, totalPaise: seats.reduce((a, s) => a + s.pricePaise, 0), status: 'active', expiresAt: new Date(now + 10 * 60e3).toISOString() };
+    seats.forEach(s => { s.hold = h.id; s.until = now + 10 * 60e3; });
+    return (M.holds[h.id] = h);
+  }
+  if ((m = path.match(/^\/api\/v1\/holds\/([^/]+)(\/confirm)?$/))) {
+    const h = M.holds[m[1]];
+    if (Date.parse(h.expiresAt) <= now) err(410, 'hold has expired');
+    const seats = M.seats[h.flightId].filter(s => s.hold === h.id);
+    if (method === 'DELETE') { seats.forEach(s => s.hold = null); h.status = 'released'; return null; }
+    const pnr = Array.from(crypto.getRandomValues(new Uint8Array(6)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b & 31]).join('');
+    seats.forEach(s => { s.pnr = pnr; s.hold = null; }); h.status = 'confirmed';
+    return (M.bookings[pnr] = { pnr, seats: h.seats, totalPaise: h.totalPaise, status: 'confirmed' });
+  }
+  err(404, 'not found');
+}
+
+// ── UI state and rendering ───────────────────────────────────────────────
+let flightId = 1, picked = [], hold = null, booking = null, tick = null;
+const $ = id => document.getElementById(id);
+const rupees = p => '₹' + (p / 100).toLocaleString('en-IN');
+const seatOrder = (a, b) => parseInt(a) - parseInt(b) || a.slice(-1).localeCompare(b.slice(-1));
+
+async function loadFlights() {
+  try { await call('GET', '/api/v1/flights'); }
+  catch { demo = true; mockSeed(); }
+  $('mode').innerHTML = demo
+    ? 'Demo mode: no API answered, so this page is running the booking rules in your browser. Add <code>?api=https://your-api-url</code> to use the real Go server.'
+    : 'Connected to the Go booking API' + (API ? ' at <code>' + API + '</code>' : '') + '. Your user id: <code>' + user + '</code>.';
+  const { flights } = await call('GET', '/api/v1/flights');
+  $('flights').innerHTML = flights.map(f => `<button data-id="${f.id}" aria-pressed="${f.id === flightId}"><b>${f.number} · ${f.from} → ${f.to}</b><span>${new Date(f.departure).toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></button>`).join('');
+  $('flights').onclick = e => { const b = e.target.closest('button'); if (b && !hold) { flightId = +b.dataset.id; picked = []; booking = null; loadFlights(); } };
+  await loadSeats();
+}
+
+async function loadSeats() {
+  const map = await call('GET', `/api/v1/flights/${flightId}/seats`);
+  let html = '<div class="row"><span></span>' + [...'ABC'].map(l => `<span class="head">${l}</span>`).join('') + '<span></span>' + [...'DEF'].map(l => `<span class="head">${l}</span>`).join('') + '</div>';
+  map.rows.forEach(row => {
+    const cell = s => {
+      const mine = picked.includes(s.seat) || (hold && hold.seats.includes(s.seat));
+      const cls = mine ? 'picked' : s.status === 'available' ? '' : s.status;
+      return `<button class="seat ${s.cabin} ${cls}" data-seat="${s.seat}" ${s.status !== 'available' && !mine ? 'disabled' : ''} aria-label="Seat ${s.seat}, ${s.cabin}, ${mine ? 'selected' : s.status}, ${rupees(s.pricePaise)}" title="${s.seat} · ${rupees(s.pricePaise)}">${s.seat}</button>`;
+    };
+    html += `<div class="row${row[0].row === 3 ? ' gap' : ''}"><span class="n">${row[0].row}</span>${row.slice(0, 3).map(cell).join('')}<span></span>${row.slice(3).map(cell).join('')}</div>`;
+  });
+  $('cabin').innerHTML = html;
+  $('cabin').onclick = e => {
+    const b = e.target.closest('.seat'); if (!b || b.disabled || hold) return;
+    const s = b.dataset.seat;
+    picked = picked.includes(s) ? picked.filter(x => x !== s) : picked.length < 9 ? [...picked, s] : picked;
+    loadSeats();
+  };
+  window.prices = Object.fromEntries(map.rows.flat().map(s => [s.seat, s.pricePaise]));
+  renderPanel();
+}
+
+function renderPanel(message = '') {
+  const p = $('panel');
+  if (booking) {
+    p.innerHTML = `<h2>Booked</h2><label>Your PNR</label><div class="pnr">${booking.pnr}</div><p class="picked-list">Seats ${booking.seats.join(', ')} · ${rupees(booking.totalPaise)}</p><button class="btn secondary" id="again">Book more seats</button>`;
+    $('again').onclick = () => { booking = null; loadSeats(); };
+    return;
+  }
+  if (hold) {
+    const left = Math.max(0, Date.parse(hold.expiresAt) - Date.now());
+    p.innerHTML = `<h2>Seats held for you</h2><div class="timer" id="timer">${fmt(left)}</div><p class="picked-list">${hold.seats.join(', ')} · ${rupees(hold.totalPaise)}</p><button class="btn" id="confirm">Pay and confirm</button><button class="btn secondary" id="release">Release seats</button><div class="msg">${message}</div>`;
+    $('confirm').onclick = confirmHold; $('release').onclick = releaseHold;
+    return;
+  }
+  const total = picked.reduce((a, s) => a + (window.prices?.[s] || 0), 0);
+  p.innerHTML = `<h2>Your selection</h2><div class="total">${rupees(total)}</div><div class="picked-list">${picked.length ? [...picked].sort(seatOrder).join(', ') : 'Tap seats on the map (up to 9).'}</div><button class="btn" id="hold" ${picked.length ? '' : 'disabled'}>Hold ${picked.length || ''} seat${picked.length === 1 ? '' : 's'} for 10 minutes</button><div class="msg">${message}</div>`;
+  $('hold').onclick = createHold;
+}
+
+const fmt = ms => `${String(Math.floor(ms / 60000)).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+
+async function createHold() {
+  try {
+    hold = await call('POST', '/api/v1/holds', { flightId, seats: picked }, crypto.randomUUID());
+    picked = [];
+    tick = setInterval(() => {
+      const left = Date.parse(hold.expiresAt) - Date.now();
+      if (left <= 0) { clearInterval(tick); hold = null; loadSeats().then(() => renderPanel('Your hold expired, so the seats were released.')); }
+      else if ($('timer')) $('timer').textContent = fmt(left);
+    }, 1000);
+    loadSeats();
+  } catch (e) { picked = picked.filter(s => !(e.data?.seats || []).includes(s)); await loadSeats(); renderPanel(e.message); }
+}
+
+async function confirmHold() {
+  // One key per click: if the network drops and we retry, the server replays
+  // the first answer instead of booking twice.
+  const key = crypto.randomUUID();
+  try { booking = await call('POST', `/api/v1/holds/${hold.id}/confirm`, null, key); clearInterval(tick); hold = null; loadSeats(); }
+  catch (e) { renderPanel(e.message); }
+}
+
+async function releaseHold() {
+  try { await call('DELETE', `/api/v1/holds/${hold.id}`); } catch {}
+  clearInterval(tick); hold = null; loadSeats();
+}
+
+loadFlights();
+</script>
+</body>
+</html>

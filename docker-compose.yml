@@ -1,0 +1,26 @@
+# `docker compose up --build` → Postgres + the API on http://localhost:8080
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: booking
+      POSTGRES_PASSWORD: booking      # local demo only; real passwords come from a secret store
+      POSTGRES_DB: booking
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]   # data survives `docker compose down`
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booking"]
+      interval: 3s
+      retries: 10
+
+  api:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      DATABASE_URL: postgres://booking:booking@db:5432/booking?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
